@@ -64,7 +64,6 @@ cd ..
 ### 2. Conda environment
 
 - Conda doc: https://docs.conda.io/projects/conda/en/latest/user-guide/tasks/manage-environments.html
-- Command line: **conda activate <env name>**
 
 #### 2-1. Conde env for alignment/mapping
 
@@ -124,7 +123,7 @@ dependencies:
 
 ### 3. Reference files
 
-- Version: [GENCODE](https://www.gencodegenes.org/human) GRCh38(hg38) release 36 (v36)
+- Version: [GENCODE](https://www.gencodegenes.org/human) GRCh38 (hg38) release 36 (v36)
 - Genome: Genome sequence, primary assembly (GRCh38)
 - Transcriptome: Transcript sequences
 - GTF: Transcript sequences (PRI)
@@ -155,8 +154,7 @@ wget -c $gtf -O $todir/gencode.v36.primary_assembly.annotation.gtf.gz
 
 #### 4-1. Indexing
 
-- Creating decoys.txt file
-- salmon_decoy_txt.sh
+- Creating decoys.txt file: salmon_decoy_txt.sh
 
 ```bash
 #!/bin/bash
@@ -176,8 +174,7 @@ cd ..
 ```
 
 
-- Creating gentrome.fa file
-- salmon_decoy_gentrome.sh
+- Creating gentrome.fa file: salmon_decoy_gentrome.sh
 
 ```bash
 #!/bin/bash
@@ -195,8 +192,7 @@ cat $transcripts $genome > $indir/gentrome.fa
 ```
 
 
-- Indexing 
-- salmon_index.sh
+- Indexing: salmon_index.sh
 
 ```bash
 #!/bin/bash
