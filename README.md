@@ -10,7 +10,7 @@
 
 #### 1-1. Downloading SRA files 
 
-- **rawdata_download.sh**
+- rawdata_download.sh
 
 ```bash
 #!/bin/bash
@@ -23,15 +23,12 @@
 # SRR950081: B2
 # SRR950082: A3
 # SRR950083: B3
-# SRR950084: A4
-# SRR950085: B4
-
 
 
 cd rawdata
 
 
-for x in {78..85}
+for x in {78..83}
 do
     prefetch SRR9500$x
 
@@ -42,7 +39,7 @@ cd ..
 
 #### 1-2. Converting to FASTQ files 
 
-- ** sra_fastq.sh**
+- sra_fastq.sh
 
 ```bash
 #!/bin/bash
@@ -55,10 +52,161 @@ cd rawdata
 
 
 
-for x in SRR9500{78..85}
+for x in SRR9500{78..83}
 do 
     fastq-dump --split-files $x/$x.sra 
 done
 
 cd ..
 ```
+
+
+### 2. Conda environment
+
+- Conda doc: https://docs.conda.io/projects/conda/en/latest/user-guide/tasks/manage-environments.html
+- Command line: **conda activate <env name>**
+
+#### 2-1. Conde env for alignment/mapping
+
+- HISAT2: http://daehwankimlab.github.io/hisat2
+- Samtools: http://www.htslib.org/doc/#manual-pages
+- salmon: https://salmon.readthedocs.io/en/latest
+- bedtools: https://bedtools.readthedocs.io/en/latest
+- gawk: https://www.gnu.org/software/gawk/manual/gawk.html
+- STAR: https://github.com/alexdobin/STAR
+
+```yml
+
+name: mapping 
+channels:
+  - conda-forge
+  - bioconda 
+  - defaults 
+dependencies:
+  - hisat2=2.2.1
+  - samtools=1.11
+  - salmon=1.4.0
+  - bedtools=2.29.2 
+  - gawk=5.1.0 
+  - star=2.7.6a
+
+```
+
+#### 2-2. Conda env for counting and differential expression (DE) analysis
+
+- DESeq2: http://bioconductor.org/packages/devel/bioc/vignettes/DESeq2/inst/doc/DESeq2.html
+- Tximport: http://bioconductor.org/packages/release/bioc/vignettes/tximport/inst/doc/tximport.html
+- Rsubread: https://bioconductor.org/packages/release/bioc/html/Rsubread.html
+
+```yml
+
+name: r
+channels:
+  - conda-forge
+  - bioconda 
+  - defaults 
+dependencies:
+  - r-base =4.0.3
+  - r-tidyverse
+  - r-data.table
+  - r-ggplot2
+  - r-markdown
+  - r-upsetr
+  - r-ggrepel
+  - r-ggplotify
+  - r-gridextra
+  - r-pheatmap
+  - bioconductor-deseq2=1.30.0
+  - bioconductor-annotationhub=2.22.0
+  - bioconductor-tximport=1.18.0
+  - bioconductor-rsubread=2.4.0
+```
+
+### 3. Reference files
+
+- Version: [GENCODE](https://www.gencodegenes.org/human) GRCh38(hg38) release 36 (v36)
+- Genome: Genome sequence, primary assembly (GRCh38)
+- Transcriptome: Transcript sequences
+- GTF: Transcript sequences (PRI)
+- reference_download.sh
+
+```bash
+#!/bin/bash
+
+todir=reference_GENCODE
+
+mkdir $todir
+
+# Assign location of transcriptome file
+transcriptome=ftp://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_human/release_36/gencode.v36.transcripts.fa.gz
+genome=ftp://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_human/release_36/GRCh38.primary_assembly.genome.fa.gz
+gtf=ftp://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_human/release_36/gencode.v36.primary_assembly.annotation.gtf.gz
+
+
+# Download human transcriptome and genome files 
+wget -c $transcriptome -O $todir/gencode.v36.transcripts.fa.gz
+wget -c $genome -O $todir/GRCh38.v36.genome.fa.gz
+wget -c $gtf -O $todir/gencode.v36.primary_assembly.annotation.gtf.gz
+
+# Unzip the reference files manually!!!
+```
+
+### 4. Salmon mapping 
+
+#### 4-1. Indexing
+
+- Creating decoys.txt file
+- salmon_decoy_txt.sh
+
+```bash
+#!/bin/bash
+
+indir=salmon_index
+
+# Move to the indexing directory
+cd reference_GENCODE
+
+# Save reference names into decoys.txt
+grep "^>" < *.genome.fa | cut -d " " -f 1 > $indir/decoys.txt
+
+# Replace ">" to "" in the decoys.txt file
+sed -i.bak -e 's/>//g' $indir/decoys.txt
+
+cd .. 
+```
+
+
+- Creating gentrome.fa file
+- salmon_decoy_gentrome.sh
+
+```bash
+#!/bin/bash
+
+cd reference_GENCODE
+
+indir=salmon_index
+
+# Assign location of transcripts and genome reference files 
+transcripts=*transcripts.fa 
+genome=*genome.fa
+
+# Concatenate them and save as.gentrome.fa
+cat $transcripts $genome > $indir/gentrome.fa
+```
+
+
+- Indexing 
+- salmon_index.sh
+
+```bash
+#!/bin/bash
+
+# Move to the directory where gentrome.fa and decoys.txt files have been created 
+cd reference_GENCODE/salmon_index 
+
+salmon index -t gentrome.fa -d decoys.txt -p 8 -i gencode_index --gencode
+
+cd ../..
+```
+
+#### 4-2. Mapping
