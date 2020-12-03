@@ -154,7 +154,7 @@ wget -c $gtf -O $todir/gencode.v36.primary_assembly.annotation.gtf.gz
 
 #### 4-1. Indexing
 
-- Creating decoys.txt file: salmon_decoy_txt.sh
+- **Creating decoys.txt file**: salmon_decoy_txt.sh
 
 ```bash
 #!/bin/bash
@@ -174,7 +174,7 @@ cd ..
 ```
 
 
-- Creating gentrome.fa file: salmon_decoy_gentrome.sh
+- **Creating gentrome.fa file**: salmon_decoy_gentrome.sh
 
 ```bash
 #!/bin/bash
@@ -192,7 +192,7 @@ cat $transcripts $genome > $indir/gentrome.fa
 ```
 
 
-- Indexing: salmon_index.sh
+- **Indexing**: salmon_index.sh
 
 ```bash
 #!/bin/bash
