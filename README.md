@@ -304,7 +304,11 @@ done
 
 ### 6. HISAT2 
 
+- Flags are described in [my previous HISAT2 workflow](https://github.com/Mira0507/hisat2_test/blob/master/workflow.md)
+
 #### 6-1. Indexing
+
+- hisat2_index.sh
 
 ```bash
 #!/bin/bash
@@ -326,4 +330,61 @@ cd ..
 # "index": <ht2_base> 
 ```
 
+#### 6-2. Alignment
 
+- hisat2_align.sh
+
+```bash
+#!/bin/bash 
+
+# Define directory and sample names
+refdir=reference_GENCODE/hisat2_index/index   # reference directory
+samples=(A{1..3} B{1..3})                     # sample names
+outdir=hisat2_output                          # output directory
+indir=rawdata                                 # input directory
+
+mkdir $outdir 
+
+
+for read in ${samples[*]} 
+
+do 
+
+    hisat2 -q -p 8 --seed 23 -x $refdir -1 $indir/${read}_1.fastq -2 $indir/${read}_2.fastq -S $outdir/$read.sam 
+
+done 
+
+cd ..
+```
+
+#### 6-3. Converting SAM to BAM 
+
+- uses samtools
+- hisat2_samtobam.sh
+
+```bash
+#!/bin/bash
+
+cd hisat2_output
+
+input=(A{1..3} B{1..3})  
+
+for f in ${input[*]}
+
+do
+    samtools view -bS $f.sam > $f.bam 
+done 
+
+
+cd ..
+```
+
+
+#### 6-4. Sorting 
+
+- uses samtools
+- hisat2_sort.sh
+
+```bash
+
+```
