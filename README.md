@@ -242,7 +242,7 @@ cd ..
 
 - Flags are described in [my previous STAR workflow](https://github.com/Mira0507/star_test/blob/master/workflow_ens.md).
 
-### 5-1. Indexing
+#### 5-1. Indexing
 
 - star_index.sh
 
@@ -267,7 +267,7 @@ mkdir $ref/$index
 STAR --runThreadN 8 --runMode genomeGenerate --genomeDir $ref/$index --genomeFastaFiles $ref/$genome --sjdbGTFfile $ref/$gtf 
 ``` 
 
-### 5-2. Alignment
+#### 5-2. Alignment
 
 - star_align.sh
 
@@ -300,3 +300,30 @@ done
 # --readFilesCommand: required when the input files are .gzip format (e.g. --readFilesCommand zcat, --readFilesCommand gunzip -c, or --readFilesCommand bunzip2)
 # Note: the output files are generated in the current directory
 ```
+
+
+### 6. HISAT2 
+
+#### 6-1. Indexing
+
+```bash
+#!/bin/bash
+
+# Define directory path or file 
+refdir=reference_GENCODE    # reference directory
+genome=*genome.fa           # reference genome
+outdir=hisat2_index         # ouput directory storing index files
+
+mkdir $refdir/$outdir
+
+hisat2-build -f -o 4 -p 8 --seed 67 $refdir/$genome $refdir/$outdir/index 
+
+cd ..
+
+# Basic command line: hisat2-build [options] <reference_in> <ht2_base>
+# -f ~ --seed: options
+# "reference_GENCODE/*genome.fa": <reference_in> 
+# "index": <ht2_base> 
+```
+
+
