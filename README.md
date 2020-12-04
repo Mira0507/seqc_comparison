@@ -6,7 +6,7 @@
 - SRA number: [SRP028705](https://www.ncbi.nlm.nih.gov/sra?term=SRP028705)
 - Reference paper: [Genome Biol. 2013;14(9):R95. doi: 10.1186/gb-2013-14-9-r95.](https://pubmed.ncbi.nlm.nih.gov/24020486)
 - Sample preparation: The Sequencing Quality Control Consortium generated two datasets from two reference RNA samples in order to evaluate transcriptome profiling by next-generation sequencing technology. Each sample contains one of the reference RNA source and a set of synthetic RNAs from the External RNA Control Consortium (ERCC) at known concentrations. Group A contains 5 replicates of the Strategene Universal Human Reference RNA (UHRR), which is composed of total RNA from 10 human cell lines, with 2% by volume of ERCC mix 1. Group B includes 5 replicate samples of the Ambion Human Brain Reference RNA (HBRR) with 2% by volume of ERCC mix 2. The ERCC spike-in control is a mixture of 92 synthetic polyadenylated oligonucleotides of 250-2000 nucleotides long that are meant to resemble human transcripts.      
-- Raw data was downloaded with [SRA toolkit](https://github.com/Mira0507/using_SRA/blob/master/README.md) 
+- Raw data was downloaded with [SRA toolkit](https://github.com/Mira0507/using_SRA/blob/master/README.md)
 
 #### 1-1. Downloading SRA files 
 
@@ -119,6 +119,7 @@ dependencies:
   - bioconductor-annotationhub=2.22.0
   - bioconductor-tximport=1.18.0
   - bioconductor-rsubread=2.4.0
+  - bioconductor-seqc=1.24.0
 ```
 
 ### 3. Reference files
@@ -206,3 +207,96 @@ cd ../..
 ```
 
 #### 4-2. Mapping
+
+- Flags used in this analysis is decribed in [my previous Salmon workflow](https://github.com/Mira0507/salmon_test/blob/master/workflow.md) except **-r**
+- Since this is a paird-end analysis, **-1** and **-2** are used instead of **-r** 
+
+
+```bash
+#!/bin/bash
+
+# Define name of input/output directory
+in=rawdata
+out=salmon_output
+
+
+# Define index file directory
+ind=reference_GENCODE/salmon_index/gencode_index
+
+# Define file names 
+samples=(A{1..3} B{1..3})
+
+mkdir $out
+
+cd $in
+
+for read in ${samples[*]}
+do
+    salmon quant -i ../$ind -l A --gcBias --seqBias -1 ${read}_1.fastq -2 ${read}_2.fastq -p 8 --validateMappings -o ../$out/${read}.salmon_quant
+done
+
+cd ..
+```
+
+### 5. STAR alignment 
+
+- Flags are described in 
+
+### 5-1. Indexing
+
+- star_index.sh
+
+```bash 
+
+#!/bin/bash 
+
+
+# Define reference directy 
+ref=reference_GENCODE
+
+# Define output directory
+index=star_index
+
+
+# Define reference file names
+genome=*genome.fa
+gtf=*.gtf
+
+mkdir $ref/$index  
+
+STAR --runThreadN 8 --runMode genomeGenerate --genomeDir $ref/$index --genomeFastaFiles $ref/$genome --sjdbGTFfile $ref/$gtf 
+``` 
+
+### 5-2. Alignment
+
+- star_align.sh
+
+```bash
+
+#!/bin/bash
+
+# Define directory names 
+outdir=star_output   # directory storing output files
+indir=rawdata        # input directory (fastq files)
+refdir=/home/mira/Documents/programming/Bioinformatics/SEQC/reference_GENCODE     # reference directory (absolute path needed!)
+indexdir=star_index    # index directory
+genome=*genome.fa      # reference file
+gtf=*.gtf              # GTF file
+
+
+samples=(A{1..3} B{1..3})
+
+
+
+for read in ${samples[*]} 
+
+do 
+    STAR --runThreadN 8 --runMode alignReads --genomeDir $refdir/$indexdir --sjdbGTFfile $refdir/$gtf -sjdbOverhang 100 --readFilesIn $indir/${read}_1.fastq $indir/${read}_2.fastq --outFileNamePrefix $read --outFilterType BySJout --outFilterMultimapNmax 20 --alignSJoverhangMin 8 --alignSJDBoverhangMin 1 --outFilterMismatchNmax 999 --outFilterMismatchNoverReadLmax 0.04 --alignIntronMin 20 --alignIntronMax 1000000 --outSAMunmapped None --outSAMtype BAM SortedByCoordinate --quantMode GeneCounts --twopassMode Basic --chimOutType Junctions
+
+done
+
+
+# --readFilesIn: For paired-end reads, use comma separated list for read1, followed by space, followed by comma separated list for read2
+# --readFilesCommand: required when the input files are .gzip format (e.g. --readFilesCommand zcat, --readFilesCommand gunzip -c, or --readFilesCommand bunzip2)
+# Note: the output files are generated in the current directory
+```
