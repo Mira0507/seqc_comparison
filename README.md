@@ -240,7 +240,7 @@ cd ..
 
 ### 5. STAR alignment 
 
-- Flags are described in 
+- Flags are described in [my previous STAR workflow](https://github.com/Mira0507/star_test/blob/master/workflow_ens.md).
 
 ### 5-1. Indexing
 
