@@ -302,7 +302,7 @@ done
 ```
 
 
-### 6. HISAT2 
+### 6. HISAT2 alignment
 
 - Flags are described in [my previous HISAT2 workflow](https://github.com/Mira0507/hisat2_test/blob/master/workflow.md)
 
