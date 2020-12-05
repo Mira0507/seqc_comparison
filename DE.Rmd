@@ -105,7 +105,7 @@ head(AnnoDb)
 SampleNames <-  c(paste0("A", 1:3), paste0("B", 1:3)) 
 
 # Aligner names
-Alingers <- c("Salmon", "STAR", "HISAT2")
+Aligners <- c("Salmon", "STAR", "HISAT2")
 
 # Define group level
 GroupLevel <- c("A", "B")
@@ -180,7 +180,7 @@ fcounts.fn <- function(vec) {
                          GTF.attrType=GTF.attrType,
                          isGTFAnnotationFile=T,
                          nthread=nthread, 
-                         isPairedEnd=T,
+                         isPairedEnd=T,  
                          verbose=T)
 
     return(fc$counts)
@@ -211,7 +211,13 @@ salmon.txi <- tximport(metadata$Salmon_path,
                        ignoreTxVersion=T) 
 
 # Extract the counts and save as a data frame
-salmon.counts <- salmon_txi$counts
+salmon.counts <- salmon.txi$counts
+
+# Explore the salmon count data frame
+head(salmon.counts)
+dim(salmon.counts)
+summary(salmon.counts)
+
 
 # Explore the salmon count data frame
 head(salmon.counts)
@@ -250,18 +256,73 @@ summary(hisat2.counts)
 
 ```
 
-## Data cleaning: new annotation and row naming 
+## Data cleaning: sample and gene annotation
 
 
 ```{r count_dataframe_cleaning}
 
-countList <- list(Aligners[1]=salmon.counts, 
-                  Alingers[2]=star.counts,
-                  Aligners[3]=hisat2.counts)
+countList <- list(salmon.counts, 
+                  star.counts,
+                  hisat2.counts)
+
+# Assign names of the count data frames in the count list
+names(countList) <- Aligners
+
+# Set a function cleaning the count data frame
+clean.df <- function(df) {
+
+    # Convert to a data frame
+    df <- as.data.frame(df)
+
+    # Assign column names
+    names(df) <- SampleNames
+
+    # Bring row names to a column
+    df <- df %>% rownames_to_column(var="Gene")
+
+    return(df)
+}
+
+# Clean the count data frames
+for (x in Aligners) {
+
+    countList[[x]] <- clean.df(countList[[x]])
+}
+
+# Explore the cleaned count data frames 
+head(countList[[1]])
+head(countList[[2]])
+head(countList[[3]])
 
 
+# Remove the transcripts id column from the annodation data frame
+AnnoDb.gene <- unique(AnnoDb[, -1])
+    
+# Join the annotation data frame with the salmon count data frame
+countList[[Aligners[1]]] <- full_join(AnnoDb.gene, 
+                                      countList[[Aligners[1]]],
+                                      by=c("ENSEMBL"="Gene")) 
+
+# Convert ENSEMBL gene id to gene names and the counts to integers
+countList[[Aligners[1]]] <- countList[[Aligners[1]]][, -1] %>%
+    gather("Samples", "Counts", -SYMBOL) %>%
+    group_by(SYMBOL, Samples) %>%
+    summarize(sum.Counts=round(sum(Counts))) %>%
+    spread(Samples, sum.Counts, fill=0)
+
+# Rename the gene column
+names(countList[[Aligners[1]]]) <- c("Gene", SampleNames)
+
+# Explore the cleaned salmon count data frame
+head(countList[[Aligners[1]]])
+summary(countList[[Aligners[1]]])
 ```
 
+## Plotting library size per sample
+
+```{r library_size}
+
+```
 
 ```{r session_info}
 
