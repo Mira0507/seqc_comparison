@@ -31,8 +31,8 @@ library(AnnotationHub)
 library(tximport)
 library(Rsubread)
 library(DESeq2)
-
-
+library(seqc)
+library(ensembldb)
 ```
 
 ## Setting AnnotationHub
@@ -43,7 +43,7 @@ library(DESeq2)
 
 
 AnnotationSpecies <- "Homo sapiens"  # Assign your species 
-ah <- AnnotationHub(hub=getAnnotationHubOption("URL"))   # Bring annotation DB
+ah <- AnnotationHub(hub=getAnnotationHubOption("URL"))  # Bring annotation DB
 
 ```
 
@@ -53,52 +53,77 @@ ah <- AnnotationHub(hub=getAnnotationHubOption("URL"))   # Bring annotation DB
 
 ```{r running_annotationhub}
 
-# Filter annotation of interest
-ahQuery <- query(ah, c("OrgDb", AnnotationSpecies))      
-if (length(ahQuery) == 1) {
-    DBName <- names(ahQuery)
-} else if (length(ahQuery) > 1) {
-               DBName <- names(ahQuery)[1]
-} else {
-    print("You don't have a valid DB")
-    rmarkdown::render() 
-} 
+# Set a function querying annotation
+anno.fn <- function(selection, tx, gene, alias=NULL) {
 
+    db <- query(ah, selection)
+    dbName <- names(db)[length(db)]
+    db <- ah[[dbName]]
 
-AnnoDb <- ah[[DBName]] # Store into an OrgDb object  
-
-
-# Explore your OrgDb object with following accessors:
-# columns(AnnpDb)
+# Explore with following accessors:
+# columns(AnnoDb)
 # keytypes(AnnoDb)
 # keys(AnnoDb, keytype=..)
 # select(AnnoDb, keys=.., columns=.., keytype=...)
-AnnoKey <- keys(AnnoDb, keytype="ENSEMBLTRANS")
 
-AnnoDb <- select(AnnoDb, 
-                 AnnoKey,
-                 keytype="ENSEMBLTRANS",  # genes
-                 columns=c("ENSEMBL", "SYMBOL"))
+    annokey <- keys(db, keytype=tx)
+
+    annodb <- select(db, 
+                     annokey,
+                     keytype=tx,
+                     columns=c(gene, "SYMBOL", alias))
+
+    return(annodb)
+}
 
 
+# Filter annotation of interest
+AnnoDb.en <- anno.fn("EnsDb.Hsapiens", "TXID", "GENEID")
+AnnoDb.or <- anno.fn(c(AnnotationSpecies, "OrgDb"), 
+                     "ENSEMBLTRANS", "ENSEMBL", alias="ALIAS")
+
+# Explore the outputs
+head(AnnoDb.en)
+head(AnnoDb.or)
+dim(AnnoDb.en)
+dim(AnnoDb.or)
+
+# Join two annotation tables
+AnnoDb <- full_join(AnnoDb.en, AnnoDb.or, 
+                    by=c("GENEID"="ENSEMBL"))
 
 head(AnnoDb)
-```
+dim(AnnoDb)
+summary(AnnoDb)
+sum(is.na(AnnoDb))
+sum(is.na(AnnoDb$GENEID))
+sum(is.na(AnnoDb$TXID))
+sum(is.na(AnnoDb$ENSEMBLTRANS))
+sum(is.na(AnnoDb$SYMBOL.x))
+sum(is.na(AnnoDb$SYMBOL.y))
+sum(is.na(AnnoDb$ALIAS))
 
-## Checking out the AnnotationHub output 
+AnnoDb <- AnnoDb %>% 
+    gather(Gene, SYMBOL, SYMBOL.x, SYMBOL.y, ALIAS) %>% 
+    group_by(TXID, GENEID) %>% 
+    summarize(GENE=SYMBOL) %>%
+    distinct(TXID, GENEID, GENE) %>%
+    na.omit()
 
-```{r checking_annotationhub_output}
-
-# Check if your AnnoDb has been extracted and saved correctely
-class(AnnoDb)
 head(AnnoDb)
-
+dim(AnnoDb)
+summary(AnnoDb)
+sum(is.na(AnnoDb))
+sum(is.na(AnnoDb$GENEID))
+sum(is.na(AnnoDb$TXID))
+sum(is.na(AnnoDb$GENE))
+sum(duplicated(AnnoDb))
 ```
 
 
 ## Metadata setting
 
-```{r}
+```{r generating_metadata}
 # This code chunk needs to be written by yourself 
 
 # Define sample names 
@@ -154,22 +179,66 @@ print(metadata)
 
 ```
 
+
+## Importing the SEQC qPCR dataset 
+
+### Used a dataset provided by [**seqc**](http://bioconductor.org/packages/release/data/experiment/html/seqc.html) package in bioconductor 
+
+```{r importing_seqc}
+
+# Create a character vector assigning column names 
+mycol <- c("Symbol", paste0(SampleNames, "_value"))
+
+# Slice the taqman data frame only for genes and the assigned SampleNames (A1-A3, B1-B3)
+seqc <- taqman[, colnames(taqman) %in% mycol]
+
+# Explore the sliced taqman qPCR data 
+head(seqc)
+dim(seqc)
+sum(is.na(seqc))
+
+
+# Add annotation to the qPCR dataset
+seqc <- right_join(AnnoDb, 
+                   seqc,
+                   by=c("GENE"="Symbol")) # Explore seqc
+
+
+head(seqc)
+dim(seqc)
+summary(seqc)
+sum(duplicated(seqc))
+sum(is.na(seqc))
+sum(is.na(seqc$TXID))
+sum(is.na(seqc$GENEID))
+sum(is.na(seqc$GENE))
+
+seqc[is.na(seqc$TXID),] %>% print(n=155) 
+
+
+
+
+```
+
+
+
+
 ## featureCounts parameter setting
 
 ```{r featurecounts_parameters}
 
 # "mm10", "mm9", "hg38", or "hg19"
-annot.inbuilt <- "hg38"
+annot.inbuilt <- "hg38" 
 
 # GTF file path
 annot.ext <- "reference_GENCODE/gencode.v36.primary_assembly.annotation.gtf"
 
 # annotation type:
 # e.g.: "gene_id", "transcript_id", or "gene_name"
-GTF.attrType <- "gene_name"
+GTF.attrType <- "gene_id"
 
 # Number of cores 
-nthread <- 8
+nthread <- 16 
 
 # Set a function importing counts from BAM files with featureCounts()
 fcounts.fn <- function(vec) {
@@ -207,7 +276,7 @@ fcounts.fn <- function(vec) {
 # Import gene level summarized counts 
 salmon.txi <- tximport(metadata$Salmon_path, 
                        type = "salmon", 
-                       tx2gene=AnnoDb[, -3],   # Annotate at gene level (ENSEMBL)
+                       tx2gene=AnnoDb[, 1:2],   # Annotate at gene level (ENSEMBL)
                        ignoreTxVersion=T) 
 
 # Extract the counts and save as a data frame
@@ -218,11 +287,6 @@ head(salmon.counts)
 dim(salmon.counts)
 summary(salmon.counts)
 
-
-# Explore the salmon count data frame
-head(salmon.counts)
-dim(salmon.counts)
-summary(salmon.counts)
 ```
 
 ### Importing STAR counts
@@ -269,7 +333,7 @@ countList <- list(salmon.counts,
 names(countList) <- Aligners
 
 # Set a function cleaning the count data frame
-clean.df <- function(df) {
+clean.fn <- function(df) {
 
     # Convert to a data frame
     df <- as.data.frame(df)
@@ -278,44 +342,89 @@ clean.df <- function(df) {
     names(df) <- SampleNames
 
     # Bring row names to a column
-    df <- df %>% rownames_to_column(var="Gene")
+    df <- df %>% rownames_to_column(var="GENEID")
 
     return(df)
 }
 
+clean.annotation.fn <- function(df) {
+
+    # Re-annotate without version specification
+    df <- separate(df, "GENEID", c("GENEID", "Version"))
+    df <- df[, colnames(df) != "Version"]
+
+    return(df)
+}
+
+
+
+
 # Clean the count data frames
 for (x in Aligners) {
 
-    countList[[x]] <- clean.df(countList[[x]])
+    countList[[x]] <- clean.fn(countList[[x]])
+
+    if (x %in% Aligners[2:3]) {
+
+        countList[[x]] <- clean.annotation.fn(countList[[x]])
 }
+
+   
+    # Remove duplicated rows
+    countList[[x]] <- distinct(countList[[x]], 
+                               GENEID, A1, A2, A3, B1, B2, B3)
+
+}
+
+
 
 # Explore the cleaned count data frames 
 head(countList[[1]])
 head(countList[[2]])
 head(countList[[3]])
+dim(countList[[1]])
+dim(countList[[2]])
+dim(countList[[3]])
+sum(duplicated(countList[[1]]))
+sum(duplicated(countList[[2]]))
+sum(duplicated(countList[[3]]))
 
 
-# Remove the transcripts id column from the annodation data frame
-AnnoDb.gene <- unique(AnnoDb[, -1])
+# Convert Salmon counts to integers 
+countList[["Salmon"]] <- cbind(GENEID=countList[["Salmon"]][, "GENEID"],
+                               round(countList[["Salmon"]][, 
+                               colnames(countList[["Salmon"]]) %in% SampleNames]))
+
+# Explore the cleaned count data frames 
+head(countList[[1]])
+
+
+```
+
+## Subsetting genes which are in the seqc qPCR data frame
+
+```{r subsetting_seqc_genes}
+
+subList <- countList
+
+for (x in Aligners) {
+
+    table <- subList[[x]]
+    subList[[x]] <- table[table$GENEID %in% seqc$GENEID,]
     
-# Join the annotation data frame with the salmon count data frame
-countList[[Aligners[1]]] <- full_join(AnnoDb.gene, 
-                                      countList[[Aligners[1]]],
-                                      by=c("ENSEMBL"="Gene")) 
 
-# Convert ENSEMBL gene id to gene names and the counts to integers
-countList[[Aligners[1]]] <- countList[[Aligners[1]]][, -1] %>%
-    gather("Samples", "Counts", -SYMBOL) %>%
-    group_by(SYMBOL, Samples) %>%
-    summarize(sum.Counts=round(sum(Counts))) %>%
-    spread(Samples, sum.Counts, fill=0)
+}
 
-# Rename the gene column
-names(countList[[Aligners[1]]]) <- c("Gene", SampleNames)
+# Explore the cleaned count data frames 
+head(subList[[1]])
+head(subList[[2]])
+head(subList[[3]])
+dim(subList[[1]])
+dim(subList[[2]])
+dim(subList[[3]])
 
-# Explore the cleaned salmon count data frame
-head(countList[[Aligners[1]]])
-summary(countList[[Aligners[1]]])
+
+
 ```
 
 ## Plotting library size per sample
