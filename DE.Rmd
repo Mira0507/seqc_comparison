@@ -401,9 +401,11 @@ head(countList[[1]])
 
 ```
 
-## Subsetting genes which are in the seqc qPCR data frame
+## Subsetting genes in the count datasets
 
-```{r subsetting_seqc_genes}
+
+
+```{r subsetting_genesI}
 
 subList <- countList
 
@@ -427,11 +429,463 @@ dim(subList[[3]])
 
 ```
 
-## Plotting library size per sample
+
+## Subsetting genes in the qPCR dataset
+
+
+```{r subsetting_genesII}
+
+# Count the number of gene id from the qPCR data set in the count data
+sum(seqc$GENEID %in% subList[[1]]$GENEID)
+
+# Remove the transcript id column 
+sub.seqc <- seqc[seqc$GENEID %in% subList[[1]]$GENEID,][, colnames(seqc) != "TXID"]
+
+# Count the number of duplocated rows
+sum(duplicated(sub.seqc))
+
+
+# Filter out the duplicated rows
+sub.seqc <- distinct(sub.seqc)
+
+# Explore the cleaned data 
+head(sub.seqc)
+dim(sub.seqc)
+sum(is.na(sub.seqc))
+
+```
+
+## Plotting sequencing depth 
 
 ```{r library_size}
 
+# Set a function generating a data frame with sequencing depth
+seq.depth.fn <- function(df, aligner) {
+
+    seqdf <- as.data.frame(colSums(df[, SampleNames])) %>% 
+        rownames_to_column (var="Sample") %>% 
+        mutate(Aligner=aligner)
+
+    names(seqdf) <- c("Sample", "Count", "Aligner")
+
+    return(seqdf)
+}
+
+# Set a function for a bar plot comparing values
+comparing.barplot.fn <- function(df, yval, title, ytitle) {
+
+    ggplot(df, 
+       aes(x=Sample, y=yval, group=Aligner, fill=Aligner)) +
+    geom_bar(stat="identity", position="dodge", color="black") +
+    theme_bw() +
+    ggtitle(title) + 
+    ylab(ytitle)
+
+}
+
+
+
+
+
+
+
+# Initialize the seq depth data frame with the first aligner
+seq.depth.df <- seq.depth.fn(countList[[1]], Aligners[1])
+
+# Extend the seq depth data frame with the rest of aligners
+for (x in Aligners) {
+
+    if (x %in% Aligners[2:length(Aligners)]) {
+
+        seq.depth.df <- rbind(seq.depth.df, 
+                              seq.depth.fn(countList[[x]], x))
+    }
+}
+
+# Explore how the data frame 
+print(seq.depth.df)
+summary(seq.depth.df)
+
+# Convert character vectors to factors
+seq.depth.df$Sample <- factor(seq.depth.df$Sample, 
+                              levels=SampleNames)
+seq.depth.df$Aligner <- factor(seq.depth.df$Aligner, 
+                               levels=Aligners)
+
+# Create a plot presenting sequencing depth
+comparing.barplot.fn(seq.depth.df, 
+                     seq.depth.df$Count, 
+                     "Sequencing Depth by Sample and Aligner", 
+                     "Count")
+
 ```
+
+## Generating DESeq2 objects
+
+
+```{r generating_deseq2_objects}
+
+# Initialize new lists for storing dds objects
+ddsList <- subList
+vsdList <- subList
+
+
+for (x in Aligners) {
+
+    m <- countList[[x]][, colnames(subList[[x]]) != "GENEID"] %>% as.matrix()
+    rownames(m) <- countList[[x]]$GENEID
+
+    ddsList[[x]] <- DESeqDataSetFromMatrix(m, 
+                                           colData=metadata, 
+                                           design=~Group) 
+
+    vsdList[[x]] <- varianceStabilizingTransformation(ddsList[[x]], 
+                                                      blind=TRUE) 
+}
+
+# Explore generated objects
+summary(ddsList)
+summary(vsdList)
+
+
+```
+
+
+## Estimating size factors
+
+
+```{r size_factors}
+
+# Calculate and add size factors to the DEseq object
+for (x in Aligners) {
+
+    ddsList[[x]] <- estimateSizeFactors(ddsList[[x]])
+
+}
+
+# Set a function summarizing size factors by aligner to a data frame
+sfactor.fn <- function(df, aligner) {
+
+    sizefactor <- as.data.frame(round(sizeFactors(df), 3)) %>%
+        rownames_to_column(var="Sample") %>%
+        mutate(Aligner=aligner)
+
+    names(sizefactor) <- c("Sample", "Size_Factor", "Aligner")
+
+    return(sizefactor)
+
+}
+
+# Initialize a data frame with the first aligner 
+size.factor.df <- sfactor.fn(ddsList[[1]], Aligners[1])
+
+
+for (x in Aligners) {
+
+    if (x != Aligners[1]) {
+
+        size.factor.df <- rbind(size.factor.df, 
+                                sfactor.fn(ddsList[[x]], x))
+    }
+}
+
+
+# Explore the data frame
+print(size.factor.df)
+
+# Convert character vectors to factors
+size.factor.df$Sample <- factor(size.factor.df$Sample, 
+                              levels=SampleNames)
+size.factor.df$Aligner <- factor(size.factor.df$Aligner, 
+                               levels=Aligners)
+
+# Plot calculated size factors
+comparing.barplot.fn(size.factor.df, 
+                     size.factor.df$Size_Factor,  
+                     "Size Factors by Aligner and Sample", 
+                     "Size Factor")
+
+```
+
+
+## Estimating dispersion and Wald test
+
+```{r dispersion_waldtest}
+
+for (x in Aligners) {
+
+    # Dispersion
+    ddsList[[x]] <- estimateDispersions(ddsList[[x]])
+    
+    # Wald test
+    ddsList[[x]] <- nbinomWaldTest(ddsList[[x]])
+
+}
+
+
+# Explore generated data in the dds object 
+ddsList[[1]]
+
+```
+
+## Sample QC: Principal Component Analysis 
+
+```{r QC_PCA}
+
+# Assigne what to compare
+GroupOfInterest <- Contrast[1]
+
+
+# Set a function for sample pca
+qcpca.fn <- function(obj, title) {
+
+    plotPCA(obj,
+        intgroup=GroupOfInterest,
+        returnData=FALSE) + theme_bw() + ggtitle(paste("PCA:", title)) 
+
+}
+
+# Print the plots
+qcpca.fn(vsdList[[1]], Aligners[1]) 
+qcpca.fn(vsdList[[2]], Aligners[2])
+qcpca.fn(vsdList[[3]], Aligners[3]) 
+
+
+
+
+```
+
+## Sample QC: Sample Correlation Heatmap
+
+```{r QC_correlation_heatmap}
+
+# Heatmap annotation
+HeatmapAnno <- metadata[, c("Sample", "Group")]
+
+# Set a function generating a correlation heatmap
+cheatmap.fn <- function(df, title) {
+
+    # Extract a normalized count matrix
+    vm <- assay(df)
+
+    # Generate a correlation matrix
+    cm <- cor(vm)
+
+    # Generate a heatmap
+    pheatmap(cm, 
+             annotation=HeatmapAnno, 
+             main=paste("Sample Correlation Heatmap:", title))
+}
+
+
+# Print the heatmaps
+cheatmap.fn(vsdList[[1]], Aligners[1])
+cheatmap.fn(vsdList[[2]], Aligners[2])
+cheatmap.fn(vsdList[[3]], Aligners[3])
+
+```
+
+## Running DE analysis
+
+
+```{r DE_analysis}
+
+
+
+# Run DESeq 
+for (x in Aligners) {
+
+    ddsList[[x]] <- DESeq(ddsList[[x]])
+    # Check result names 
+    ResNames <- resultsNames(ddsList[[x]])
+    print(ResNames)
+
+}
+
+
+```
+
+## Creating a dispersion plot
+
+```{r dispersion_plot}
+
+# Set a function plotting dispersion
+dplot.fn <- function(dds, title) {
+
+    plotDispEsts(dds, 
+                 main=paste("Dispersion over Counts:", title))
+}
+
+# Plot dispersion patterns
+dplot.fn(ddsList[[1]], Aligners[1])
+dplot.fn(ddsList[[2]], Aligners[2])
+dplot.fn(ddsList[[3]], Aligners[3])
+
+# Do they fit well with the DESeq2 estimation model?
+
+```
+
+## Setting how to extract fold-change results
+### Change variables below
+
+```{r setting_resultcondition}
+
+# Set FDR threshold alpha
+alpha=0.1
+
+# Set the coefficients to compare 
+Coef <- ResNames[-1]
+print(Coef) 
+
+
+
+
+
+# Set a function to clean a result table 
+lfctable.fn <- function(df) {
+    df <- df %>% 
+        rownames_to_column(var="GENEID") %>%
+        mutate(FDR=ifelse(padj < 0.1 & !is.na(padj), 
+                                   "< 0.1", 
+                                   "> 0.1")) 
+    return(df)
+}
+
+# Set a function extracting results
+extract.lfc.fn <- function(dds) {
+
+    res <- results(dds, contrast=Contrast, alpha=alpha)
+    lfctable.fn(as.data.frame(res))
+
+    return(lfctable.fn(as.data.frame(res)))
+
+
+}
+
+```
+
+
+## Extracting log2FoldChanges
+### You can change alpha depending on your interest of FDR level
+
+
+
+```{r DEresult_extraction}
+
+# Initialize a list storing lfc data frames
+lfcList <- countList
+
+# Extract DE results
+# The Contrast variable was defined in the previous chunk
+# Extraction with no shrinkage
+# alpha: FDR threshold
+for (x in Aligners) {
+
+    lfcList[[x]] <- extract.lfc.fn(ddsList[[x]])
+
+    print(head(lfcList[[x]]))
+
+}
+
+
+
+```
+
+
+
+## Exploring distribution of false discovery rate (FDR)
+
+```{r FDR_distribution}
+
+# Initialize a data frame for FDR with the first lfc data frame
+fdr.df <- data.frame(Aligner=Aligners[1], 
+                     FDR=lfcList[[1]]$padj)
+
+# Extract FDRs from each result data frame
+for (x in Aligners) {
+
+    if (x != Aligners[1]) {
+
+        afdr <- data.frame(Aligner=x, 
+                           FDR=lfcList[[x]]$padj)
+
+        fdr.df <- rbind(fdr.df, afdr)
+
+    }
+}
+
+
+# Explore the output FDR data frame
+head(fdr.df)
+
+# Convert character variables to factors
+fdr.df$Aligner <- factor(fdr.df$Aligner, levels=Aligners)
+
+# Plot distribution of FDR 
+ggplot(fdr.df, 
+       aes(x=FDR, y=..count.., color=Aligner)) + 
+    geom_density() + 
+    theme_bw() + 
+    scale_x_log10() + 
+    ggtitle("Distribution of False Discovery Rate (FDR) by Aligner") + 
+    ylab("Count")
+
+```
+
+## Presenting distribution of log2FoldChange
+
+### Black: total genes (padj =/= NA)
+### Colored: genes above or below FDR=0.1
+
+
+```{r L2FC_distribution}
+
+# Initialize a data frame storing lfc values
+ldist.df <- data.frame(Aligner=Aligners[1], 
+                       LFC=subset(lfcList[[1]], FDR == "< 0.1")$log2FoldChange)
+
+# Extract lfc values from each result data frame
+for (x in Aligners) {
+
+    if (x != Aligners[1]) {
+
+        ld <- data.frame(Aligner=x,
+                         LFC=subset(lfcList[[x]], 
+                                    FDR == "< 0.1")$log2FoldChange)
+
+        ldist.df <- rbind(ldist.df, ld)
+
+    }
+
+}
+
+# Explore the output data frame
+head(ldist.df)
+
+# Convert character variables to factors
+ldist.df$Aligner <- factor(ldist.df$Aligner, levels=Aligners)
+
+# Plot distribution of log2FoldChange by aligner
+ggplot(ldist.df,
+       aes(x=LFC,
+           y=..count.., 
+           color=Aligner)) +
+geom_density() + 
+theme_bw() + 
+geom_vline(xintercept=c(-1, 1), 
+           linetype="dashed", color="black", size=0.5) + 
+ggtitle("Distribution of log2FoldChange Values by Aligner (FDR < 0.1)") +
+ylab("Count")
+
+
+
+```
+
+
+## Exploring mean-difference with an MA plot
+
+
+## Session Info
 
 ```{r session_info}
 
