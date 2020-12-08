@@ -120,6 +120,7 @@ dependencies:
   - bioconductor-tximport=1.18.0
   - bioconductor-rsubread=2.4.0
   - bioconductor-seqc=1.24.0
+  - bioconductor-ensembldb=2.14.0 
 ```
 
 ### 3. Reference files
