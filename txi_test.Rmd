@@ -1,0 +1,1072 @@
+---
+title: 
+output: html_document
+---
+
+## Raw data 
+
+#### - Link: https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE49712
+
+#### - **Study aim**: Comprehensive evaluation of differential gene expression analysis methods for RNA-seq data
+
+#### - **Study summary**: Sequencing Quality Control Consortium generated two datasets from two reference RNA samples in order to evaluate transcriptome profiling by next-generation sequencing technology. Each sample contains one of the reference RNA source and a set of synthetic RNAs from the External RNA Control Consortium (ERCC) at known concentrations. Group A contains 5 replicates of the Strategene Universal Human Reference RNA (UHRR), which is composed of total RNA from 10 human cell lines, with 2% by volume of ERCC mix 1. Group B includes 5 replicate samples of the Ambion Human Brain Reference RNA (HBRR) with 2% by volume of ERCC mix 2. The ERCC spike-in control is a mixture of 92 synthetic polyadenylated oligonucleotides of 250-2000 nucleotides long that are meant to resemble human transcripts.
+
+#### - **Sample**: A(replicates of the Strategene Universal Human Reference RNA (UHRR)), B(replicate samples of the Ambion Human Brain Reference RNA (HBRR) with 2% by volume of ERCC mix 2)
+
+
+```{r global_options, include=FALSE}
+knitr::opts_chunk$set(
+    warning=FALSE,
+    message=FALSE
+    )
+```
+
+
+
+## Loading packages
+
+```{r loading_packages}
+library(data.table)
+library(rmarkdown)
+library(AnnotationHub)
+library(tidyverse)
+library(tximport)
+library(ggplot2)
+library(DESeq2)
+library(pheatmap)
+library(gridExtra)
+library(ggplotify)
+library(ggrepel)
+library(UpSetR)
+```
+
+## Setting AnnotationHub
+
+Assign your species of interest
+
+```{r annotationhub_setup}
+AnnotationSpecies <- "Homo sapiens"  # Assign your species 
+ah <- AnnotationHub(hub=getAnnotationHubOption("URL"))   # Bring annotation DB
+```
+
+## Running AnnotationHub 
+
+```{r run_annotationhub}
+ahQuery <- query(ah, c("OrgDb", AnnotationSpecies))      # Filter annotation of interest
+if (length(ahQuery) == 1) {
+    DBName <- names(ahQuery)
+} else if (length(ahQuery) > 1) {
+               DBName <- names(ahQuery)[1]
+} else {
+    print("You don't have a valid DB")
+    rmarkdown::render() 
+} 
+AnnoDb <- ah[[DBName]] # Store into an OrgDb object  
+# Explore your OrgDb object with following accessors:
+# columns(AnnpDb)
+# keytypes(AnnoDb)
+# keys(AnnoDb, keytype=..)
+# select(AnnoDb, keys=.., columns=.., keytype=...)
+AnnoKey <- keys(AnnoDb, keytype="ENSEMBLTRANS")
+# Note: Annotation has to be done with not genome but transcripts 
+AnnoDb <- select(AnnoDb, 
+                 AnnoKey,
+                 keytype="ENSEMBLTRANS",
+                 columns="SYMBOL")
+```
+
+
+## Checking out the AnnotationHub output 
+
+```{r checking_annotationhub_output}
+# Check if your AnnoDb has been extracted and saved correctely
+class(AnnoDb)
+head(AnnoDb)
+```
+
+## Defining file name and path for .sf files
+
+.sf files have been created from fastq data by salmon
+
+
+```{r preparing_importing.sf}
+
+# This code chunk needs to be written by yourself 
+# Define sample names 
+SampleNames <-  c(paste0("A", 1:3), paste0("B", 1:3))
+
+# Define group level
+GroupLevel <- c("A", "B")
+
+# Define contrast for DE analysis
+Contrast <- c("Group", "B", "A")
+
+# Define a vector for comparing TPM vs Counts effect 
+TvC <- c("TPM", "Counts")
+
+# Define .sf file path
+sf <- c(paste0("salmon_output/", 
+               SampleNames, 
+               ".salmon_quant/quant.sf"))
+
+# Define sample groups
+group <- c(rep("A", 3), rep("B", 3))
+
+# Create metadata
+metadata <- data.frame(Sample=factor(SampleNames, levels=SampleNames),
+                       Group=factor(group, levels=GroupLevel),
+                       Path=sf)
+
+rownames(metadata) <- SampleNames
+
+# Explore the metadata
+print(metadata)
+```
+
+## Converting .sf files to txi list 
+
+#### - txi_tpm: stores **TPM** with the argument **"countsFromAbundance="lengthScaledTPM"**
+
+#### - txi_counts: stores **original counts** 
+
+#### - Despite that the TPM matrix is not recommended as an input for DE analysis due to the fact that it doesn't account gene length, TPM stored in a tximport (by **tximport(..., countsFromAbundance="lengthScaledTPM")**) can be used for DE analysis by being inputted with the **DESeqDataSetFromTximport()** funtion in DESeq2 workflow as the gene length is automatically adjusted by DESeqDataSetFromTximport(). 
+
+#### - In this project, two txi objects were created with or without the countsFromAbundance="lengthScaledTPM" argument and compared in downstream DE analysis. 
+
+#### - If you don't want gene-level summarization, set **txOut=TRUE**. 
+
+#### - References: [**tximport doc**](https://bioconductor.riken.jp/packages/3.4/bioc/vignettes/tximport/inst/doc/tximport.html), [**DESeq2 doc "Why unnormalized counts?"**](https://www.bioconductor.org/packages/devel/bioc/vignettes/DESeq2/inst/doc/DESeq2.html#why-un-normalized-counts), [**Soneson et al. 2016**](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC4712774/), [**Developer Dr. Love's comment**](https://support.bioconductor.org/p/84059/), [**Harvard Chan Bioinformatics Core workshop**](https://github.com/hbctraining/DGE_workshop_salmon_online/blob/master/lessons/02_DGE_count_normalization.md)
+
+
+```{r saving_reads_to_dataframe}
+# Assign sample names to the input (.sf) file path
+names(sf) <- SampleNames
+# Run tximport
+# tpm vs original counts
+# input sf: a factor of all .sf files' path
+txi_tpm <- tximport(sf, 
+                    type="salmon",
+                    tx2gene=AnnoDb,
+                    countsFromAbundance="lengthScaledTPM", # Extracts TPM 
+                    ignoreTxVersion=T) 
+txi_counts <- tximport(sf, 
+                    type="salmon",
+                    tx2gene=AnnoDb,
+                    ignoreTxVersion=T) 
+```
+
+## Exploring the txi outputs 
+
+```{r txi_outputs}
+# tpm 
+head(txi_tpm$counts)
+dim(txi_tpm$counts)
+# counts
+head(txi_counts$counts)
+dim(txi_counts$counts)
+```
+
+
+## Creating DESeq objects from txi and VST
+
+#### - Note: The tximport-to-DESeq2 approach uses estimated gene counts from the transcript abundance quantifiers, but not normalized counts.
+
+#### - The **DESeqDataSetFromTximport()** function generated an DESeq object (aka **dds**) with the **txi input**. 
+
+#### - **vst()** was run to perform variance stabilizing transformation instead of rlog() which takes longer time with similar characteristics. 
+
+#### - The **vsd** object created by vst() is used for not DE analysis but QC. 
+
+#### - References: [**DESeq2 doc "Transcript abundance files"**](https://www.bioconductor.org/packages/devel/bioc/vignettes/DESeq2/inst/doc/DESeq2.html#tximport), [**DESeq2 doc "Variance stabilizing transformation"**](https://www.bioconductor.org/packages/devel/bioc/vignettes/DESeq2/inst/doc/DESeq2.html#variance-stabilizing-transformation)
+
+
+
+
+```{r creating_dds_vsd}
+
+# Set a function creating dds and vsd
+dds_vsd_fn <- function(txi) { 
+    # Create a DESeq object (so-calledd dds) 
+    des <- DESeqDataSetFromTximport(txi, 
+                                    colData=metadata,
+                                    design=~Group)
+    # Create a vsd object (so-called vsd) 
+    ves <- vst(des, blind=T)
+    # Output them as a list 
+    return(list(dds=des, vsd=ves))
+}
+
+TPM <- dds_vsd_fn(txi_tpm)
+
+Counts <- dds_vsd_fn(txi_counts)
+
+# Outputs
+# dds: TPM/Counts[[1]] or TPM/Counts[['dds']] 
+# vsd: TPM/Counts[[2]] or TPM/Counts[['vsd']]
+```
+
+
+## Exploring created dds 
+
+```{r exploring_dds}
+
+# TPM 
+TPM[[1]]
+head(counts(TPM[[1]]))
+
+# Counts
+Counts[[1]]
+head(counts(Counts[[1]]))
+```
+
+## Exploring created vsd
+
+```{r exploring_vsd}
+# TPM
+TPM[[2]]
+# Counts
+Counts[[2]]
+```
+
+
+## Estimating size factors, dispersions, and conducting Wald Test
+
+#### - **Dispersion** is calculated as a **measure of variation** instead of variance since variance gets larger when gene expression gets higher. 
+
+#### - **Wald test** is the default setting of DESeq2 which tests null hypothesis between **two groups**. You should use **Likelihood ratio test (LRT)** when comparing **more than two groups**.     
+
+#### - Messages when "Counts <- DESeqPrep_fn(Counts)" was run:       
+using **'avgTxLength'** from assays(dds), correcting for library size
+gene-wise dispersion estimates
+mean-dispersion relationship
+final dispersion estimates
+
+#### - References: [**Harvard Chan Bioinformatics Core workshop I**](https://github.com/hbctraining/DGE_workshop_salmon_online/blob/master/lessons/05b_wald_test_results.md), [**Harvard Chan Bioinformatics Core workshop II**](https://github.com/hbctraining/DGE_workshop_salmon_online/blob/master/lessons/05a_hypothesis_testing.md), [**Harvard Chan Bioinformatics Core workshop III**](https://github.com/hbctraining/DGE_workshop_salmon_online/blob/master/lessons/04b_DGE_DESeq2_analysis.md), [**DESeq2 "Wald test indivisual steps**](https://www.bioconductor.org/packages/devel/bioc/vignettes/DESeq2/inst/doc/DESeq2.html#wald-test-individual-steps), [**DESeq2 doc "Likelihood ratio test"**](https://www.bioconductor.org/packages/devel/bioc/vignettes/DESeq2/inst/doc/DESeq2.html#likelihood-ratio-test)
+
+```{r DESeq_prep}
+
+# Set a function estimating size factors, dispersions, and perform wald test
+DESeqPrep_fn <- function(List) {
+    
+    List[[1]] <- estimateSizeFactors(List[[1]])
+    List[[1]] <- estimateDispersions(List[[1]])
+    List[[1]] <- nbinomWaldTest(List[[1]])
+   
+    return(List)
+}
+
+# Update dds with the function
+Counts <- DESeqPrep_fn(Counts) 
+TPM <- DESeqPrep_fn(TPM)
+```
+
+## Exploring size factors
+
+```{r exploring_sizefactors}
+
+sizeFactors(Counts[[1]])
+sizeFactors(TPM[[1]])
+
+# Size factors don't exist in the Counts dds!
+# Normalization factors are calculated in the Counts dds instead! 
+assays(Counts[[1]])
+assays(TPM[[1]])
+
+colData(Counts[[1]])
+colData(TPM[[1]])
+```
+
+## Plotting the size factors in TPM
+
+#### - The size factors are only available from TPM dds 
+
+
+```{r plotting_sizefactors}
+
+# Extract and save the size factors in a data frame
+sizeFactor <- as.data.frame(round(sizeFactors(TPM[[1]]), 3))
+
+colnames(sizeFactor) <- 'Size_Factor'
+
+sizeFactor <- sizeFactor %>%
+    rownames_to_column(var="Sample") %>%
+    inner_join(metadata[, 1:ncol(metadata)-1], by="Sample") 
+
+# Create a plot comparing the size factors by sample
+
+ggplot(sizeFactor, aes(x=Sample, 
+                       y=Size_Factor, 
+                       fill=Group,
+                       label=Size_Factor)) +
+    geom_bar(stat="identity", width=0.8) +
+    theme_bw() + 
+    ggtitle("Size Factors in TPM-DESeq") +
+    geom_text(vjust=1.5) +
+    theme(axis.text.x=element_text(angle=45, 
+                                   vjust=0.5)) + ylab("Size Factor")
+    
+```
+
+
+## Plotting nornalization factors in the Counts
+
+#### - DESeq2 performs an internal normalization where geometric mean is calculated for each gene across all samples. The counts for a gene in each sample is then divided by this mean. The median of these ratios in a sample is the size factor for that sample.
+
+#### - Blue dashed line: normalization factor = 1
+
+#### - Colored **dots**: **normlization factors per gene** (y-axis) in each sample 
+
+#### - Box plots: distribution of the normalization facters in each group (see the second plot)
+
+#### - Reference: [**DESeq2 doc "Sample-/gene-dependent normalization factors"**](https://www.bioconductor.org/packages/devel/bioc/vignettes/DESeq2/inst/doc/DESeq2.html#log-fold-change-shrinkage-for-visualization-and-ranking)
+
+
+```{r plotting_normalizationfactors}
+
+# Extract and normalization factors in a data frame
+normf <- as.data.frame(normalizationFactors(Counts[[1]])) %>%
+    gather(Sample, Normalization_Factor) %>%
+    inner_join(metadata[, 1:2], by="Sample") 
+
+normf$Sample <- factor(normf$Sample, levels=SampleNames)
+
+normf$Group <- factor(normf$Group, levels=GroupLevel)
+
+# Create a scatter plot showing distribution of normalization factors 
+normFactors_plot <- ggplot(normf, 
+       aes(x=Sample, y=Normalization_Factor)) + 
+geom_jitter(alpha=0.5, aes(color=Group)) + 
+
+# Add a boxplot to provide statistics in each sample
+geom_boxplot(aes(x=Sample, y=Normalization_Factor), 
+             outlier.shape=NA, alpha=0.5) + 
+theme_bw() +
+ggtitle("Normalization Factors in Counts-DESeq") +
+theme(axis.text.x=element_text(angle=45, 
+                               vjust=0.5)) + 
+ylab("Normalization Factor / Gene") +
+
+# Add a dashed horizontal line to indicate where normalization factor=1
+geom_hline(yintercept=1, 
+           color="blue", 
+           linetype="dashed")
+
+# Print the normalization factor scatter plot 
+print(normFactors_plot)
+
+# Print the same plot with larger y-magnification in order to observe the box plot 
+normFactors_plot + 
+    ylim(0.5, 1.5)
+
+```
+
+### Results & Discussion 1: 
+
+#### - Patterns of the size factors (from TPM) and the normalization factors per gene (from Counts) by sample were similar in terms of magnitude   
+
+
+## Setting functions for QC plots
+
+#### - Reference: [**DESeq2 doc "Principal component plot of the samples"**](https://www.bioconductor.org/packages/devel/bioc/vignettes/DESeq2/inst/doc/DESeq2.html#principal-component-plot-of-the-samples), [**DESeq2 doc "Heatmap of the sample-to-sample distances"**](https://www.bioconductor.org/packages/devel/bioc/vignettes/DESeq2/inst/doc/DESeq2.html#heatmap-of-the-sample-to-sample-distances)
+
+```{r QCplot_functions}
+
+# Assigne what to compare
+GroupOfInterest <- Contrast[1] 
+
+# Set a function for a PCA plot
+QCPCA_fn <- function(inputList, Title) {
+    plotPCA(inputList[[2]],    # takes vsd
+            intgroup=GroupOfInterest) + theme_bw() + ggtitle(Title)
+}
+
+# Set heatmap annotation 
+ColOfInterest <- !colnames(metadata) %in% c("Sample", "Path")
+HeatmapAnno <- as.data.frame(metadata[, ColOfInterest])
+rownames(HeatmapAnno) <- SampleNames
+colnames(HeatmapAnno) <- colnames(metadata)[ColOfInterest]
+
+# Set a function for a correlation heatmap 
+QCcorrHeatmap_fn <- function(inputList, Title) {
+    # Extract transformed count matrix
+    mtx <- assay(inputList[[2]])      # takes vsd
+    # Calculate correlation and store in the matrix
+    mtx <- cor(mtx)
+    
+    
+    # Create a correlation heatmap
+    return(pheatmap(mtx, 
+             annotation=HeatmapAnno,
+             main=paste("Sample Correlation Heatmap:",
+                        Title)))
+}
+```
+
+
+## Sample QC: Principal Component Analysis 
+
+#### - Checkpoints in PCA: source of variation, sample outlier
+
+
+
+```{r QC_PCA}
+
+QCPCA_fn(TPM, "QC PCA: TPM")
+
+QCPCA_fn(Counts, "QC PCA: Counts")
+
+```
+
+
+
+
+## Sample QC: Sample Correlation Heatmap
+
+#### - Checkpoints of correlation heatmap: distance between samples, correlation in a group
+
+#### - Upper: TPM input
+
+#### - Lower: Counts input
+
+```{r QC_correlation_heatmap}
+
+# TPM
+QCcorrHeatmap_fn(TPM, "TPM") 
+
+# Counts
+QCcorrHeatmap_fn(Counts, "Counts") 
+```
+
+### Results & Discussion 2: 
+
+#### - Unsupervised learning-mediated sample QC resulted in highly similar patterns between TPM and Counts 
+
+
+## Running DE analysis
+
+
+```{r DE_analysis}
+
+# Create a list for TPM and Counts dds 
+ddsList <- list(TPM=TPM[[1]], Counts=Counts[[1]]) 
+
+for (x in TvC) {
+    # Run DESeq() 
+    ddsList[[x]] <- DESeq(ddsList[[x]])
+    print(resultsNames(ddsList[[x]]))
+}
+```
+
+## Creating dispersion plots
+
+#### - Dispersion is important since estimation by DESeq2 algorithm is based on the assumption that genes with similar expression levels have similar dispersion. If an RNA-seq dataset doesn't satisfy this assumption, use other DE algorithms than DESeq2. 
+
+#### - References: [**DESeq2 doc "Dispersion plot and fitting alternatives**](https://www.bioconductor.org/packages/devel/bioc/vignettes/DESeq2/inst/doc/DESeq2.html#dispersion-plot-and-fitting-alternatives), [**Harvard Chan Bioinformatics Core workshop **](https://github.com/hbctraining/DGE_workshop_salmon_online/blob/master/lessons/04b_DGE_DESeq2_analysis.md)
+
+
+```{r dispersion_plot}
+
+# Plot dispersion  
+for (x in TvC) {
+
+    plotDispEsts(ddsList[[x]], 
+                 ylab="Dispersion", 
+                 xlab="Mean of Normalized Counts", 
+                 main=paste("Dispersion of", x, "Input"))
+}
+```
+
+### Results & Discussion 3:
+
+#### - Both inputs gave a goot fit
+
+#### - No major difference was seen in the dispersion plots between two conditions 
+
+
+## Performing shrinkage 
+
+#### - Shrinkage reduces false positives
+
+#### - Magnitude of shrinkage is affected by dispersion and sample size
+
+#### - When the argument **type** is set to **"apeglm"**, the **coef** argument is used instead of constrast. In this dataset, you can set **coef=Coef** where **Coef <- resultsNames(ddsList[[1]])**. 
+
+#### - When the **type** is set to **"normal"**, the argument **contrast** is set as shown below. 
+
+#### - References: [**DESeq2 doc "Alternative shrinkage estimators"**](https://www.bioconductor.org/packages/devel/bioc/vignettes/DESeq2/inst/doc/DESeq2.html#alternative-shrinkage-estimators), [**Harvard Chan Bioinformatics Core workshop **](https://github.com/hbctraining/DGE_workshop_salmon_online/blob/master/lessons/04b_DGE_DESeq2_analysis.md)
+
+
+
+```{r shrinkage}
+
+# Create an empty list for shrunken dds
+shr_ddsList <- list(TPM=c(), Counts=c()) 
+
+for (x in TvC) {
+    # shrink
+    shr_ddsList[[x]] <- lfcShrink(ddsList[[x]], 
+                                  contrast=Contrast, # contrast  
+                                  type="normal")     # is paired with "normal" type
+}
+```
+
+
+# Extracting log2FoldChange and p-values with or without shrinkage
+
+#### - The **alpha** denotes threshold of **false discovery rate (FDR)** assigned by users.
+
+#### - In this analysis, the alpha is set to **0.1** 
+
+
+```{r extracting_log2FoldChanges}
+
+# Set FDR threshold 
+alpha=0.1 
+
+# FDR threshold vector
+FDRv=c("< 0.1", "> 0.1") 
+
+# Set a function cleaning table
+Sig_fn <- function(df, Input) {
+
+    df <- df %>% 
+        rownames_to_column(var="Gene") %>%
+        mutate(FDR=ifelse(padj < 0.1 & !is.na(padj), 
+                                   FDRv[1], 
+                                   FDRv[2]), 
+               Input=Input) 
+    return(df)
+}
+
+# Initialize lists of result tables with (resList) or without (shr_resList) shrinkage
+resList <- ddsList 
+shr_resList <- ddsList  
+
+for (x in TvC) {
+
+    # Extract results
+    resList[[x]] <- as.data.frame(results(ddsList[[x]], 
+                                          contrast=Contrast, 
+                                          alpha=alpha))
+
+    shr_resList[[x]] <- as.data.frame(shr_ddsList[[x]])
+
+    # clean the data frame
+    resList[[x]] <- Sig_fn(resList[[x]], x)
+    shr_resList[[x]] <- Sig_fn(shr_resList[[x]], x)
+    
+}
+```
+
+
+## Exploratory data analysis of the extracted log2FoldChange tables
+
+
+
+```{r exploring_foldtable}
+
+# No shrinkage summary
+summary(resList)
+head(resList[['TPM']])
+head(resList[['Counts']])
+
+# Shrinkage summary
+summary(shr_resList)
+head(shr_resList[['TPM']])
+head(shr_resList[['Counts']])
+```
+
+
+## Exploring mean-difference relationship with MA plots
+
+#### - Reference: [**DESeq2 doc "MA-plot"**](https://www.bioconductor.org/packages/devel/bioc/vignettes/DESeq2/inst/doc/DESeq2.html#ma-plot)
+
+
+```{r MAplot}
+
+# Set ylim: has to adjusted by users depending on data 
+yl <- c(-20, 20)
+
+# Set min log2 fold change of interest 
+mLog <- c(-1, 1)
+
+# Define a function creating an MA plot
+MA_fn <- function(List, Shr) {
+
+    MAList <- ddsList 
+
+    for (i in 1:2) {
+        MAplot <- ggplot(List[[i]], 
+                         aes(x=baseMean,
+                             y=log2FoldChange,
+                             color=FDR)) + geom_point() + scale_x_log10() + theme_bw() + scale_color_manual(values=c("blue", "grey")) + ggtitle(paste("MA plot:", names(List)[i], "Input with", Shr)) + ylim(yl[1], yl[2])+ geom_hline(yintercept=c(mLog[1], mLog[2]), linetype="dashed", color="red")
+        MAList[[i]] <- MAplot
+    }
+    return(MAList)
+}
+
+# Create MA plots with or without shrinkage and store in a list
+MA <- MA_fn(resList, "No Shrinkage")
+shr_MA <- MA_fn(shr_resList, "Shrinkage")
+
+```
+
+## Displaying MA plots
+
+#### - **x-axis**: expression level (baseMean))
+
+#### - **y-axis**: fold change (log2FoldChange)
+
+#### - Red dashed lines: log2FoldChange = -1 and 1
+
+#### - **Upper**: **TPM** with (right) or without (left) shrinkage
+
+#### - **Lower**: **Counts** with (right) or without (left) shrinkage
+
+
+```{r displaying_MAplots}
+
+# TPM with or without shrinkage
+grid.arrange(MA[[1]], shr_MA[[1]], nrow=1)
+
+# TPM with or without shrinkage
+grid.arrange(MA[[2]], shr_MA[[2]], nrow=1)
+```
+
+### Results & Discussion 4: 
+
+#### - Both inputs gave fairly identical MA plots
+
+#### - No striking effect was seen by shrinkage 
+
+
+## Exploring distribution of false discovery rate (FDR)
+
+#### - Only the **shrunken results** are taken for further analysis
+
+#### - Distribution of adjusted p-val (FDR) was presented 
+
+#### - **x-axis**: FDR
+
+#### - **y-axis**: Number of genes
+
+#### - Black dashed line: FDR = 0.1
+
+```{r FDR_distribution}
+
+# Combining total data table 
+res <- rbind(resList[['TPM']], resList[['Counts']])
+res$Input <- factor(res$Input, levels=TvC)  # TvC=c("TPM", "Counts")
+
+
+# Create a plot presenting distribution of FDR
+ggplot(res,
+       aes(x=padj, color=Input)) + 
+geom_density(size=1, aes(y=..count..)) + 
+theme_bw() +
+ggtitle("Distribution of False Discovery Rate (FDR)") + 
+xlab("Adjusted P-Value (FDR)") + 
+ylab("Count") + 
+geom_vline(xintercept=alpha, 
+           color="black", 
+           linetype="dashed",
+           size=1) + 
+scale_x_continuous(breaks=seq(0, 1, by=0.1)) 
+```
+
+### Results & Discussion 5:
+
+#### - Both inputs showed highly similar FDR distribution patterns across the FDR range.  
+#### - When the FDR > 0.7, more genes were counted in the TPM input than in the Counts. 
+
+
+## Exploring distribution of log2FoldChange by input type
+
+#### - Black dashed lines: log2FoldChange = -1 and 1 
+
+#### - **x-axis**: gene expression level (log2FoldChange) 
+
+#### - **y-axis**: number of genes 
+
+```{r L2FC_distribution}
+ggplot(res[res$FDR == "< 0.1", ],  # Subset rows with FDR < alpha 
+       aes(x=log2FoldChange,
+           color=Input)) + 
+geom_density(size=1, aes(y=..count..)) +
+theme_bw() + 
+ylab("Count") + 
+geom_vline(xintercept=c(mLog[1], mLog[2]), 
+           color="black",
+           linetype="dashed", size=1) +
+ggtitle("Distribution of Log2 Folds by Input Type") + 
+xlim(xlim[1], xlim[2])
+```
+
+### Results & Discussion 7: 
+
+#### - Both inputs showed nearly identical fold change distribution
+
+
+## Exploring expression profiling with normalized count data
+
+#### - Normalized count matrices are extracted from dds objects and filtered with thresholds set at FDR and log2FoldChange
+
+#### - The heatmaps display **z-scores** of the normalized counts
+
+#### - **lowfdrList**: a list of matrices filtered by **FDR < alpha**
+
+#### - **highfoldList**: a list of matrices filtered by **FDR < alpha** AND **absolute log2FoldChange > user's minimum threshold (mLog)**
+
+#### - In this analysis, **mLog = 1**
+
+#### - References: [**Harvard Chan Bioinformatics Core workshop**](https://github.com/hbctraining/DGE_workshop_salmon_online/blob/master/lessons/06_DGE_visualizing_results.md), [**DESeq2 doc "Heatmap of the count matrix"**](https://www.bioconductor.org/packages/devel/bioc/vignettes/DESeq2/inst/doc/DESeq2.html#heatmap-of-the-count-matrix)
+
+```{r transcription_profiling}
+
+# Initialize a list 
+lowfdrList <- ddsList   # A list for normalized counts matrix with FDR below alpha
+highfoldList <- ddsList  # A list for normalized counts with log2foldchange over minLog
+
+for (x in TvC) {
+
+    # Create filtering vectors with alpha and log2foldchange
+    BelowAlpha <- resList[[x]]$FDR == FDRv[1]
+    overmLog <- abs(resList[[x]]$log2FoldChange) > mLog[2]  # mLog has been set to c(-1, 1) previously
+    
+    # Extract transformed counts from vsd objects (TPM[['vsd']] and Counts[['vsd']]) 
+    if (x == "TPM") {
+
+        normCounts <- counts(TPM[['dds']], normalized=T)
+    
+    } else {
+
+        normCounts <- counts(Counts[['dds']], normalized=T)
+    }
+    
+    # Update the normalized count matrix with FDR below alpha
+    lowfdrList[[x]] <- normCounts[BelowAlpha, ]
+    highfoldList[[x]] <- normCounts[BelowAlpha & overmLog, ]
+
+    summary(lowfdrList[[x]])
+    summary(highfoldList[[x]])
+}
+
+# Initialize map lists 
+lowfdrMap <- ddsList
+highfoldMap <- ddsList 
+
+# Set a function creating a heatmap
+ProfileHeatmap_fn <- function(inputmatrix, Title1, Title2, Title3=NULL) {
+    
+    as.ggplot(pheatmap(inputmatrix, 
+             annotation=HeatmapAnno,
+             scale="row",         # presents z-score instead of counts
+             show_rownames=F,
+             main=paste("Transcription Profiles with", 
+                        Title1, 
+                        "input and", 
+                        Title2, 
+                        alpha, 
+                        Title3)))
+}
+
+# Create and save heatmaps
+for (x in TvC) {
+
+    lowfdrMap[[x]] <- ProfileHeatmap_fn(lowfdrList[[x]],
+                                        Title1=x, 
+                                        Title2="FDR <")
+    highfoldMap[[x]] <- ProfileHeatmap_fn(highfoldList[[x]], 
+                                          Title1=x, 
+                                          Title2="FDR <",
+                                          Title3=paste("+ Absolte Log2 Fold Change >", mLog[2])) 
+}
+```
+
+### Results & Discussion 8: 
+
+#### - No major difference is seen bewteen the TPM and Counts 
+
+
+
+## NA statistics: zero count genes & outlier genes  
+
+
+#### When NAs appear in  
+
+#### - **log2FoldChange**: zero counts in all samples
+
+#### - **padj**: too little information 
+
+#### - **pval & padj**: at least one replicate was an outlier 
+
+
+
+```{r DEG_statistics}
+# Count number of NA genes  
+type=c("Zero Counts", "Outliers", "Total NA Genes") 
+
+NAstat <- res %>%
+    group_by(Input) %>%
+    summarize(zero=sum(is.na(log2FoldChange)), 
+              outlier=sum(is.na(pvalue) & is.na(padj))) %>%
+    mutate(total=sum(zero, outlier)) %>%
+    gather(Type, Number, -Input) %>%
+    mutate(Type=factor(case_when(Type == "zero" ~ type[1], 
+                                 Type == "outlier" ~ type[2], 
+                                 Type == "total" ~ type[3]), 
+                       levels=type))
+
+# Plot number of NA genes 
+ggplot(NAstat, aes(x=Type, y=Number, group=Input, fill=Input, label=Number)) + 
+    geom_bar(stat="identity", position="dodge") + 
+    theme_bw() +
+    geom_text(position=position_dodge(width=1), vjust=1.5) + 
+    ggtitle("Number of NA Genes") + 
+    ylab("Number of Genes")
+
+```
+
+### Results & Discussion 9: 
+
+#### - Both inputs produced no major difference in the number of NA genes
+
+
+
+
+## Ranking DEGs with the TPM and original count inputs
+
+- **FDRrankList**: ranked by FDR
+
+- **lfcList**: ranked by absolute fold change 
+
+- **UPlfcList**: ranked by magnitude of fold change increase 
+
+- **DOWNlfcList**: ranked by manitude of fold change decrease
+
+
+```{r determining_DEGrank}
+# Create a new list having DE table with FDR below alpha
+lowfdr_resList <- resList 
+
+for (x in TvC) { 
+
+    lowfdr_resList[[x]] <- filter(resList[[x]], 
+                                  FDR == FDRv[1]) %>% 
+    as.data.table()
+}
+
+# Initialize new lists in order to store rank-updated result DE tables 
+FDRrankList <- lowfdr_resList
+lfcList <- lowfdr_resList
+UPlfcList <- lowfdr_resList
+DOWNlfcList <- lowfdr_resList
+
+# Set a function creating a column for the rank
+Ranking_fn <- function(x) {mutate(x, Rank=1:nrow(x))}
+
+for (x in TvC) { 
+
+    # Rearrange genes with FDR  
+    FDRrankList[[x]] <- lowfdr_resList[[x]][order(padj),] %>%
+        Ranking_fn()
+
+    # Rearrange genew with absolute log2FoldChange 
+    lfcList[[x]] <- lowfdr_resList[[x]][order(-abs(log2FoldChange)),] %>%
+        Ranking_fn()
+
+    # Rearrange genes with log2FoldChange (decreasing order)
+    UPlfcList[[x]] <- lowfdr_resList[[x]][order(-log2FoldChange),] %>%
+        Ranking_fn()
+
+    # Rearrange genes with log2FoldChange (increasing order)
+    DOWNlfcList[[x]] <- lowfdr_resList[[x]][order(log2FoldChange),] %>%
+        Ranking_fn()
+}
+
+# Explore the ranks
+print(c(FDRrankList, lfcList, UPlfcList, DOWNlfcList))
+```
+
+## Comparing DEG ranks between TPM- and Counts-inputted DE analysis 
+
+
+
+
+```{r comparing_DEGrank}
+
+# Set a function rebuilding DE tables with gene ranks 
+combineTable_fn <- function(List){
+
+    # Select columns and join the data frames by gene
+    full_join(List[[TvC[1]]][,.(Gene, Input, Rank, baseMean)], 
+              List[[TvC[2]]][,.(Gene, Input, Rank, baseMean)], by="Gene") %>%
+    
+    # Add columns assining gene expression levels, rank differences, and mean ranks
+    mutate(logMeanExpression=log(baseMean.x+baseMean.y/2),
+           RankDiff=Rank.x-Rank.y, 
+           MeanRank=(Rank.x+Rank.y)/2)
+} 
+
+# Explore outputs of the function
+head(combineTable_fn(FDRrankList))
+dim(combineTable_fn(FDRrankList))
+tail(combineTable_fn(FDRrankList))
+
+# Set a function plotting gene ranks between TPM- (x-axis) and Counts-Inputs (y-axis)
+compareRanks_fn <- function(df, rankedby) {
+
+ggplot(df, 
+       aes(x=Rank.x, 
+           y=Rank.y,
+           color=logMeanExpression)) +
+geom_point(alpha=0.5) + 
+theme_bw() + 
+xlab("Rank with TPM") + 
+ylab("Rank with Counts") + 
+geom_abline(slope=1, color="black", size=0.5) + 
+ggtitle(paste(rankedby, "Ranking with TPM vs Counts Inputs")) + 
+scale_color_gradient(low="blue", high="red")
+}
+   
+# Set a function plotting the rank difference over the gene expression level
+RankdiffOverMean_fn <- function(df, rankedby) {
+
+ggplot(df, 
+       aes(x=logMeanExpression, 
+           y=RankDiff,
+           color=MeanRank)) +
+geom_point(alpha=0.5) + 
+theme_bw() + 
+ylab("Rank Difference (TPM - Counts)") +
+ggtitle(paste("Rank Difference Inputs (TPM - Counts) in", rankedby)) + 
+geom_hline(yintercept=0, color="black", size=0.5) + 
+scale_color_gradient(low="blue", high="red")
+}
+```
+
+
+## Visualizing DEG ranks I: TPM- vs Counts-input
+
+#### - **x-axis**: rank with TPM input
+
+#### - **y-axis**: rank with Counts input 
+
+#### - Black diagonal lines: rank with TPM = rank with Counts 
+
+#### - Dot color: gene expression level (log-baseMean)
+
+```{r comparing_DEGrankI}
+
+# Ranked by FDR
+compareRanks_fn(combineTable_fn(FDRrankList), 
+                "FDR")
+
+# Ranked by absolute fold change 
+compareRanks_fn(combineTable_fn(lfcList), 
+                "Absolute Log2FoldChange")
+
+# Ranked by magnitude of positive fold change
+compareRanks_fn(combineTable_fn(UPlfcList), 
+                "Log2FoldChange (Increased)")
+
+# Ranked by magnitude of negative fold change
+compareRanks_fn(combineTable_fn(DOWNlfcList), 
+                "Log2FoldChange (Decreased)")
+```
+
+### Results & Discussion 10: 
+
+#### - FDR ranking (top): Genes with high expression levels (red dots) were ranked similarly between two input types which is close to the black diagonal line. Ranking dissimilarity increased in lower ranking ranges (250-500).
+
+#### - Absolute fold ranking (2nd top): Genes were ranked higher as their expression levels were lower (blue to purple dots). Genes with high expression levels (red dots) showed less difference in the rankings which is close to the black diagonal line. 
+
+#### - Decrease/increase fold ranking (bottom/2nd botton): Highly expressed genes (red dots) showed middle-rankings (150-350). Low-ranking genes tended to be ranked higher with TPM than with Counts as the slope was higher than 1 which is indicated by the black diagonal line.   
+
+
+## Visualizing DEG ranks II: Relationship between gene expression level and rank difference 
+
+#### - **x-axis**: expression level (log-baseMean)
+
+#### - **y-axis**: rank difference (rank with TPM - rank with Counts)
+
+#### - Black horizontal lines: rank with TPM = rank with Counts 
+
+#### - Dot color: average rank 
+
+
+
+```{r comparing_DEGrankII}
+
+# Ranked by FDR
+RankdiffOverMean_fn(combineTable_fn(FDRrankList), 
+                "FDR")
+
+# Ranked by absolute fold change 
+RankdiffOverMean_fn(combineTable_fn(lfcList), 
+                "Absolute Log2FoldChange")
+
+# Ranked by magnitude of positive fold change
+RankdiffOverMean_fn(combineTable_fn(UPlfcList), 
+                "Log2FoldChange (Increased)")
+
+# Ranked by magnitude of negative fold change
+RankdiffOverMean_fn(combineTable_fn(DOWNlfcList), 
+                "Log2FoldChange (Decreased)")
+```
+
+
+### Results & Discussion 11: 
+
+#### - Difference in FDR ranking (top): High-ranking genes (blue dots) showed less difference. Genes with high expression levels (higher x-values) showed less difference. 
+
+#### - Difference in absolute/increase fold ranking (2nd top/2nd bottom): Low mean ranks (red dots) seemed to be coupled with higher ranking with TPM (negative y-values) than that with Counts while high mean ranks (purple to blue dots) seemed vice versa or random. 
+
+#### - Difference in decrease fold ranking (bottom): Low-to-middle ranking genes (red-purple dots) tended to have higher ranking with TPM (negative y-values) whereas high ranking genes (blue dots) showed higher ranking with Counts (positive y-values)
+
+
+## Summarizing up/down DEGs with an upset plot 
+
+#### - Calculate the number of genes 
+
+
+```{r upsetplotting}
+
+# Clean data to generate an upset plot
+res <- res %>%
+    # Filter genes with valid padj 
+    filter(!is.na(padj)) %>% 
+    # Detect genes which are up/down/unchanged change patterns in either TPM and Counts inputs
+
+    mutate(Up=ifelse(FDR == FDRv[1] & log2FoldChange > 0, Gene, ""), # What are upregulated genes? 
+
+           Down=ifelse(FDR == FDRv[1] & log2FoldChange < 0, Gene, ""),  # What are downregulated genes? 
+
+           Unchanged=ifelse(FDR == FDRv[2], Gene, ""),   # What are unchanged genes? 
+
+           TPM_Input=ifelse(Input == "TPM", Gene, ""),   # What are the genes from TPM input? 
+
+           Counts_Input=ifelse(Input == "Counts", Gene, ""))   # What are the genes from Counts input?
+
+# Create a list storing groups of interest
+upsetInput <- list(Up=res$Up, 
+                   Down=res$Down, 
+                   Unchanged=res$Unchanged, 
+                   TPM_Input=res$TPM, 
+                   Counts_Input=res$Counts)
+
+# Create the upset plot 
+upset(fromList(upsetInput), 
+      sets.x.label="Number of Genes per Group", 
+      order.by="freq") 
+```
+
+
+
+
+
+## Session Info 
+
+```{r sessionInfo}
+sessionInfo()
+```
